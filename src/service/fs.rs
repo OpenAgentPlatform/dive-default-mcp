@@ -6,6 +6,7 @@ use rmcp::{
     tool, tool_router,
 };
 
+use base64::{engine::general_purpose, Engine as _};
 use serde::Deserialize;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
@@ -60,17 +61,8 @@ impl DiveDefaultService {
         Parameters(params): Parameters<ReadFileParams>,
     ) -> Result<CallToolResult, McpError> {
         // Check if file is binary
-        match is_binary_file(&params.path).await {
-            Ok(true) => {
-                return Err(McpError::new(
-                    rmcp::model::ErrorCode::INVALID_PARAMS,
-                    format!("Cannot read binary file: {}", params.path),
-                    None,
-                ));
-            }
-            Ok(false) => {
-                // File is text, proceed to read
-            }
+        let is_binary = match is_binary_file(&params.path).await {
+            Ok(is_bin) => is_bin,
             Err(e) => {
                 return Err(McpError::new(
                     rmcp::model::ErrorCode::INTERNAL_ERROR,
@@ -78,15 +70,34 @@ impl DiveDefaultService {
                     None,
                 ));
             }
-        }
+        };
 
-        match fs::read_to_string(&params.path).await {
-            Ok(content) => Ok(CallToolResult::success(vec![Content::text(content)])),
-            Err(e) => Err(McpError::new(
-                rmcp::model::ErrorCode::INTERNAL_ERROR,
-                format!("Failed to read file: {}", e),
-                None,
-            )),
+        if is_binary {
+            // Read binary file and encode as base64
+            match fs::read(&params.path).await {
+                Ok(bytes) => {
+                    let base64_content = general_purpose::STANDARD.encode(&bytes);
+                    Ok(CallToolResult::success(vec![Content::text(format!(
+                        "[Binary file encoded as base64]\n{}",
+                        base64_content
+                    ))]))
+                }
+                Err(e) => Err(McpError::new(
+                    rmcp::model::ErrorCode::INTERNAL_ERROR,
+                    format!("Failed to read binary file: {}", e),
+                    None,
+                )),
+            }
+        } else {
+            // Read text file normally
+            match fs::read_to_string(&params.path).await {
+                Ok(content) => Ok(CallToolResult::success(vec![Content::text(content)])),
+                Err(e) => Err(McpError::new(
+                    rmcp::model::ErrorCode::INTERNAL_ERROR,
+                    format!("Failed to read file: {}", e),
+                    None,
+                )),
+            }
         }
     }
 
